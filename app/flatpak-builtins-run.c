@@ -110,6 +110,7 @@ flatpak_builtin_run (int argc, char **argv, GCancellable *cancellable, GError **
   g_autoptr(GError) local_error = NULL;
   g_autoptr(GPtrArray) dirs = NULL;
   FlatpakRunFlags flags = 0;
+  FindMatchingRefsFlags matching_refs_flags;
 
   context = g_option_context_new (_("APP [ARGUMENT…] - Run an app"));
   g_option_context_set_translation_domain (context, GETTEXT_PACKAGE);
@@ -157,10 +158,28 @@ flatpak_builtin_run (int argc, char **argv, GCancellable *cancellable, GError **
 
   pref = argv[rest_argv_start];
 
-  if (!flatpak_split_partial_ref_arg (pref, FLATPAK_KINDS_APP | FLATPAK_KINDS_RUNTIME,
-                                      opt_arch, opt_branch,
-                                      &kinds, &id, &arch, &branch, error))
-    return FALSE;
+  if (!flatpak_allow_fuzzy_matching (pref))
+    matching_refs_flags = FIND_MATCHING_REFS_FLAGS_NONE;
+  else
+    matching_refs_flags = FIND_MATCHING_REFS_FLAGS_FUZZY;
+
+  if (matching_refs_flags & FIND_MATCHING_REFS_FLAGS_FUZZY)
+    {
+      flatpak_split_partial_ref_arg_novalidate (pref, FLATPAK_KINDS_APP | FLATPAK_KINDS_RUNTIME,
+                                                opt_arch, opt_branch,
+                                                &kinds, &id, &arch, &branch);
+
+      /* We used _novalidate so that the id can be partial, but we can still validate the branch */
+      if (branch != NULL && !flatpak_is_valid_branch (branch, -1, &local_error))
+        return flatpak_fail_error (error, FLATPAK_ERROR_INVALID_REF,
+                                   _("Invalid branch %s: %s"), branch, local_error->message);
+    }
+  else if (!flatpak_split_partial_ref_arg (pref, FLATPAK_KINDS_APP | FLATPAK_KINDS_RUNTIME,
+                                           opt_arch, opt_branch,
+                                           &kinds, &id, &arch, &branch, error))
+    {
+      return FALSE;
+    }
 
   if (branch == NULL || arch == NULL)
     {
@@ -177,10 +196,16 @@ flatpak_builtin_run (int argc, char **argv, GCancellable *cancellable, GError **
   if ((kinds & FLATPAK_KINDS_APP) != 0)
     {
       app_ref = flatpak_decomposed_new_from_parts (FLATPAK_KINDS_APP, id, arch, branch, &local_error);
+
+      if (app_ref == NULL &&
+          (matching_refs_flags & FIND_MATCHING_REFS_FLAGS_FUZZY) != 0 &&
+          g_error_matches (local_error, FLATPAK_ERROR, FLATPAK_ERROR_INVALID_REF))
+        g_clear_error (&local_error);
+
       if (app_ref != NULL)
         app_deploy = flatpak_find_deploy_for_ref_in (dirs, flatpak_decomposed_get_ref (app_ref), opt_commit, cancellable, &local_error);
 
-      if (app_deploy == NULL &&
+      if (local_error != NULL &&
           (!g_error_matches (local_error, FLATPAK_ERROR, FLATPAK_ERROR_NOT_INSTALLED) ||
            (kinds & FLATPAK_KINDS_RUNTIME) == 0))
         {
@@ -194,28 +219,25 @@ flatpak_builtin_run (int argc, char **argv, GCancellable *cancellable, GError **
 
   if (app_deploy == NULL)
     {
-      g_autoptr(FlatpakDeploy) runtime_deploy = NULL;
+      g_autoptr(FlatpakDeploy) deploy = NULL;
       g_autoptr(GError) local_error2 = NULL;
       g_autoptr(GPtrArray) ref_dir_pairs = NULL;
       RefDirPair *chosen_pair = NULL;
-      const char *runtime_arch = arch;
-
-      /* If arch is not specified, only run the default arch to avoid asking for prompts for non-primary arches,
-         still asks for prompts if there are multiple branches though */
-      if (runtime_arch == NULL)
-        runtime_arch = flatpak_get_arch ();
 
       /* Whereas for apps we want to default to using the "current" one (see
        * flatpak-make-current(1)) runtimes don't have a concept of currentness.
-       * So prompt if there's ambiguity about which branch to use */
+       * So prompt if there's ambiguity about which branch to use. Also prompt
+       * if the ref given was a partial app id, e.g. "devhelp" instead of
+       * "org.gnome.Devhelp"
+       */
       ref_dir_pairs = g_ptr_array_new_with_free_func ((GDestroyNotify) ref_dir_pair_free);
       for (i = 0; i < dirs->len; i++)
         {
           FlatpakDir *dir = g_ptr_array_index (dirs, i);
           g_autoptr(GPtrArray) refs = NULL;
 
-          refs = flatpak_dir_find_installed_refs (dir, id, branch, runtime_arch, FLATPAK_KINDS_RUNTIME,
-                                                  FIND_MATCHING_REFS_FLAGS_NONE, error);
+          refs = flatpak_dir_find_installed_refs (dir, id, branch, arch, kinds,
+                                                  matching_refs_flags, error);
           if (refs == NULL)
             return FALSE;
           else if (refs->len == 0)
@@ -223,7 +245,35 @@ flatpak_builtin_run (int argc, char **argv, GCancellable *cancellable, GError **
 
           for (int j = 0; j < refs->len; j++)
             {
+              g_autoptr(FlatpakDecomposed) current_ref = NULL;
               FlatpakDecomposed *ref = g_ptr_array_index (refs, j);
+              g_autofree char *ref_id = flatpak_decomposed_dup_id (ref);
+
+              /* Exclude app refs for non-current branches */
+              if (flatpak_decomposed_is_app (ref) && (branch == NULL || arch == NULL) &&
+                  (current_ref = flatpak_dir_current_ref (dir, ref_id, NULL)) != NULL)
+                {
+                  const char *current_branch;
+                  g_autofree char *current_arch = NULL;
+
+                  current_branch = flatpak_decomposed_get_branch (current_ref);
+                  current_arch = flatpak_decomposed_dup_arch (current_ref);
+
+                  if (branch == NULL &&
+                      !flatpak_decomposed_is_branch (ref, current_branch))
+                    continue;
+                  if (arch == NULL &&
+                      !flatpak_decomposed_is_arch (ref, current_arch))
+                    continue;
+                }
+
+              /* Avoid prompting for non-primary arches */
+              if (flatpak_decomposed_is_runtime (ref) && arch == NULL)
+                {
+                  if (!flatpak_decomposed_is_arch (ref, flatpak_get_arch ()))
+                    continue;
+                }
+
               RefDirPair *pair = ref_dir_pair_new (ref, dir);
               g_ptr_array_add (ref_dir_pairs, pair);
             }
@@ -236,7 +286,7 @@ flatpak_builtin_run (int argc, char **argv, GCancellable *cancellable, GError **
 
           chosen_pairs = g_ptr_array_new ();
 
-          if (!flatpak_resolve_matching_installed_refs (TRUE, TRUE, ref_dir_pairs, id, chosen_pairs, error))
+          if (!flatpak_resolve_matching_installed_refs (FALSE, TRUE, ref_dir_pairs, id, chosen_pairs, error))
             return FALSE;
 
           g_assert (chosen_pairs->len == 1);
@@ -247,28 +297,37 @@ flatpak_builtin_run (int argc, char **argv, GCancellable *cancellable, GError **
            * something that's not deployed */
           chosen_dir_array = g_ptr_array_new ();
           g_ptr_array_add (chosen_dir_array, chosen_pair->dir);
-          runtime_deploy = flatpak_find_deploy_for_ref_in (chosen_dir_array, flatpak_decomposed_get_ref (chosen_pair->ref),
-                                                           opt_commit ? opt_commit : opt_runtime_commit,
-                                                           cancellable, &local_error2);
+
+          if (flatpak_decomposed_is_runtime (chosen_pair->ref) && opt_commit == NULL)
+            opt_commit = opt_runtime_commit;
+
+          deploy = flatpak_find_deploy_for_ref_in (chosen_dir_array, flatpak_decomposed_get_ref (chosen_pair->ref),
+                                                   opt_commit, cancellable, &local_error2);
+          if (flatpak_decomposed_is_app (chosen_pair->ref))
+            {
+              app_deploy = g_steal_pointer (&deploy);
+              g_clear_pointer (&app_ref, flatpak_decomposed_unref);
+              app_ref = flatpak_decomposed_ref (chosen_pair->ref);
+            }
+          else
+            runtime_ref = flatpak_decomposed_ref (chosen_pair->ref);
         }
 
-      if (runtime_deploy == NULL)
+      if (deploy == NULL && app_deploy == NULL)
         {
-          /* Report old app-kind error, as its more likely right */
+          /* Report old app-kind error, as it's more likely right */
           if (local_error != NULL)
             g_propagate_error (error, g_steal_pointer (&local_error));
           else if (local_error2 != NULL)
             g_propagate_error (error, g_steal_pointer (&local_error2));
           else
             flatpak_fail_error (error, FLATPAK_ERROR_NOT_INSTALLED,
-                                _("runtime/%s/%s/%s not installed"),
+                                _("%s/%s/%s not installed"),
                                 id ?: "*unspecified*",
                                 arch ?: "*unspecified*",
                                 branch ?: "*unspecified*");
           return FALSE;
         }
-
-      runtime_ref = flatpak_decomposed_ref (chosen_pair->ref);
 
       /* Clear app-kind error */
       g_clear_error (&local_error);

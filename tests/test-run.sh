@@ -172,7 +172,7 @@ assert_file_has_content run-error-log "error: runtime/org\.test\.Platform/$ARCH/
 if run runtime/org.test.Nonexistent 2> run-error-log >&2; then
     assert_not_reached "Unexpectedly able to run non-existent runtime"
 fi
-assert_file_has_content run-error-log "error: runtime/org\.test\.Nonexistent/\*unspecified\*/\*unspecified\* not installed"
+assert_file_has_content run-error-log "error: org\.test\.Nonexistent/\*unspecified\*/\*unspecified\* not installed"
 
 ok "error handling for invalid refs"
 
