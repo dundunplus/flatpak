@@ -495,6 +495,7 @@ GFile *               flatpak_dir_get_exports_dir                           (Fla
 GFile *               flatpak_dir_get_removed_dir                           (FlatpakDir                    *self);
 GFile *               flatpak_dir_get_sideload_repos_dir                    (FlatpakDir                    *self);
 GFile *               flatpak_dir_get_runtime_sideload_repos_dir            (FlatpakDir                    *self);
+GFile *               flatpak_dir_get_aliases_dir                           (FlatpakDir                    *self);
 GFile *               flatpak_dir_get_if_deployed                           (FlatpakDir                    *self,
                                                                              FlatpakDecomposed             *ref,
                                                                              const char                    *checksum,
@@ -596,6 +597,7 @@ gboolean              flatpak_dir_config_remove_pattern                     (Fla
                                                                              const char                    *key,
                                                                              const char                    *pattern,
                                                                              GError                       **error);
+GHashTable *          flatpak_dir_get_aliases                               (FlatpakDir                    *self);
 gboolean              flatpak_dir_mark_changed                              (FlatpakDir                    *self,
                                                                              GError                       **error);
 gboolean              flatpak_dir_remove_appstream                          (FlatpakDir                    *self,

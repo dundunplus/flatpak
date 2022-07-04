@@ -79,6 +79,7 @@
 #define SYSCONF_REMOTES_FILE_EXT ".flatpakrepo"
 
 #define SIDELOAD_REPOS_DIR_NAME "sideload-repos"
+#define ALIASES_DIR_NAME "aliases"
 
 #ifdef USE_SYSTEM_HELPER
 /* This uses a weird Auto prefix to avoid conflicts with later added polkit types.
@@ -3086,6 +3087,12 @@ flatpak_dir_get_runtime_sideload_repos_dir (FlatpakDir *self)
   return g_file_get_child (base, SIDELOAD_REPOS_DIR_NAME);
 }
 
+GFile *
+flatpak_dir_get_aliases_dir (FlatpakDir *self)
+{
+  return g_file_get_child (self->basedir, ALIASES_DIR_NAME);
+}
+
 OstreeRepo *
 flatpak_dir_get_repo (FlatpakDir *self)
 {
@@ -4443,6 +4450,66 @@ flatpak_dir_config_remove_pattern (FlatpakDir *self,
   merged_patterns = g_strjoinv (";", (char **)patterns->pdata);
 
   return flatpak_dir_set_config (self, key, merged_patterns, error);
+}
+
+GHashTable *
+flatpak_dir_get_aliases (FlatpakDir *self)
+{
+  g_autoptr(GHashTable) aliases = NULL; /* alias → app-id */
+  g_autoptr(GFileEnumerator) dir_enum = NULL;
+  g_autoptr(GFile) parent = NULL;
+
+  aliases = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
+
+  if (!flatpak_dir_maybe_ensure_repo (self, NULL, NULL))
+    return g_steal_pointer (&aliases);
+
+  parent = flatpak_dir_get_aliases_dir (self);
+  dir_enum = g_file_enumerate_children (parent,
+                                        G_FILE_ATTRIBUTE_STANDARD_NAME ","
+                                        G_FILE_ATTRIBUTE_STANDARD_TYPE ","
+                                        G_FILE_ATTRIBUTE_STANDARD_SYMLINK_TARGET,
+                                        G_FILE_QUERY_INFO_NONE,
+                                        NULL, NULL);
+  if (dir_enum == NULL)
+    return g_steal_pointer (&aliases);
+
+  while (TRUE)
+    {
+      GFileInfo *info;
+      GFile *path;
+      g_autofree char *path_basename = NULL;
+      const char *target;
+      g_autoptr(GFile) target_file = NULL;
+      g_autofree char *target_basename = NULL;
+
+      if (!g_file_enumerator_iterate (dir_enum, &info, &path, NULL, NULL) ||
+          info == NULL)
+        break;
+
+      /* We expect symlinks to files in $FLATPAK_DIR/exports/bin/ */
+      if (g_file_info_get_file_type (info) != G_FILE_TYPE_SYMBOLIC_LINK)
+        continue;
+
+      path_basename = g_file_get_basename (path);
+      if (path_basename == NULL)
+        continue;
+
+      target = g_file_info_get_symlink_target (info);
+      if (target == NULL)
+        continue;
+
+      target_file = g_file_new_for_path (target);
+      target_basename = g_file_get_basename (target_file);
+      if (target_basename == NULL || !flatpak_is_valid_name (target_basename, -1, NULL))
+        continue;
+
+      g_hash_table_insert (aliases,
+                           g_steal_pointer (&path_basename),
+                           g_steal_pointer (&target_basename));
+    }
+
+  return g_steal_pointer (&aliases);
 }
 
 gboolean
