@@ -4513,6 +4513,53 @@ flatpak_dir_get_aliases (FlatpakDir *self)
 }
 
 gboolean
+flatpak_dir_make_alias (FlatpakDir  *self,
+                        const char  *app_id,
+                        const char  *alias,
+                        GError     **error)
+{
+  g_autoptr(GFile) exports = NULL;
+  g_autoptr(GFile) bindir = NULL;
+  g_autoptr(GFile) runner = NULL;
+  g_autoptr(GFile) aliases = NULL;
+  g_autoptr(GFile) alias = NULL;
+  g_autofree char *runner_relpath = NULL;
+  g_autofree char *symlink_target = NULL;
+
+  /* If the alias is valid and the app is installed, we create a symlink to the
+   * wrapper script created by flatpak_dir_deploy(). This will be used by the
+   * flatpak run command.
+   */
+
+  if (!flatpak_is_valid_alias (alias, error))
+    return FALSE;
+
+  exports = flatpak_dir_get_exports_dir (self);
+  bindir = g_file_get_child (exports, "bin");
+  runner = g_file_get_child (bindir, app_id);
+
+  if (!g_file_query_exists (runner, NULL))
+    return flatpak_fail_error (error, FLATPAK_ERROR_NOT_INSTALLED,
+                               _("No wrapper script found for %s"), app_id);
+
+  aliases = flatpak_dir_get_aliases_dir (self);
+  alias = g_file_get_child (aliases, alias);
+
+  if (g_mkdir_with_parents (flatpak_file_get_path_cached (aliases), 0755) != 0)
+    {
+      glnx_set_error_from_errno (error);
+      return FALSE;
+    }
+
+  runner_relpath = g_file_get_relative_path (self->basedir, runner);
+  symlink_target = g_build_filename ("..", runner_relpath, NULL);
+  if (!g_file_make_symbolic_link (alias, symlink_target, NULL, error))
+    return FALSE;
+
+  return TRUE;
+}
+
+gboolean
 flatpak_dir_mark_changed (FlatpakDir *self,
                           GError    **error)
 {

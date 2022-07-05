@@ -51,7 +51,7 @@ flatpak_builtin_alias (int argc, char **argv, GCancellable *cancellable, GError 
   g_autoptr(GPtrArray) dirs = NULL;
   FlatpakDir *dir;
 
-  context = g_option_context_new (_("REF ALIAS - Add an alias for running the app REF"));
+  context = g_option_context_new (_("APP ALIAS - Add an alias for running the app APP"));
   g_option_context_set_translation_domain (context, GETTEXT_PACKAGE);
 
   if (!flatpak_option_context_parse (context, options, &argc, &argv,
@@ -61,7 +61,6 @@ flatpak_builtin_alias (int argc, char **argv, GCancellable *cancellable, GError 
 
   dir = g_ptr_array_index (dirs, 0);
 
-  g_print ("argc = %d\n", argc);
   if (argc == 1)
     {
       g_autoptr(GHashTable) aliases = NULL; /* alias → app-id */
@@ -106,6 +105,7 @@ flatpak_complete_alias (FlatpakCompletion *completion)
 {
   g_autoptr(GOptionContext) context = NULL;
   g_autoptr(GPtrArray) dirs = NULL;
+  g_autoptr(GError) error = NULL;
   FlatpakDir *dir;
 
   context = g_option_context_new ("");
@@ -119,12 +119,19 @@ flatpak_complete_alias (FlatpakCompletion *completion)
   switch (completion->argc)
     {
     case 0:
-    case 1: /* REF */
+    case 1: /* APP */
       flatpak_complete_options (completion, global_entries);
       flatpak_complete_options (completion, options);
       flatpak_complete_options (completion, user_entries);
-      flatpak_complete_partial_ref (completion, FLATPAK_KINDS_APP, NULL /* arch */,
-                                    dir, NULL /* remote */);
+
+      refs = flatpak_dir_find_installed_refs (dir, NULL, NULL, NULL,
+                                              FLATPAK_KINDS_APP,
+                                              FIND_MATCHING_REFS_FLAGS_NONE,
+                                              &error);
+      if (refs == NULL)
+        flatpak_completion_debug ("find installed refs error: %s", error->message);
+
+      flatpak_complete_ref_id (completion, refs);
       break;
     }
 

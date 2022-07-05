@@ -32,7 +32,7 @@
             <cmdsynopsis>
                 <command>flatpak alias</command>
                 <arg choice="opt" rep="repeat">OPTION</arg>
-                <arg choice="plain">REF</arg>
+                <arg choice="plain">APP</arg>
                 <arg choice="plain">ALIAS</arg>
             </cmdsynopsis>
     </refsynopsisdiv>
@@ -49,13 +49,9 @@
           additional confirmation prompts are needed each time the alias is used.
         </para>
         <para>
-          The <arg choice="plain">REF</arg> argument is a full or partial
-          identifier for an app in the flatpak ref format, which looks like
-          "app/ID/ARCH/BRANCH". All elements except ID are optional and can be
-          left out, including the slashes, so most of the time you need only
-          specify ID. Any part left out will be matched against what is installed,
-          and if there are multiple matches you will be prompted to choose one of
-          them.
+          The <arg choice="plain">APP</arg> argument is the application ID of an
+          installed application. Only the current branch will be used; see
+          <citerefentry><refentrytitle>flatpak-make-current</refentrytitle><manvolnum>1</manvolnum></citerefentry>
         </para>
         <para>
           The <arg choice="plain">ALIAS</arg> argument is a string which can only
